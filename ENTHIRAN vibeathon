@@ -1,156 +1,384 @@
-onst inventoryDB = [
-    { sku: 'ITM-940', name: 'Whole Milk 1L', x: 2, y: 5, stock: 12, burn: 45 },
-    { sku: 'ITM-112', name: 'Bananas (Dozen)', x: 4, y: 1, stock: 34, burn: 18 },
-    { sku: 'ITM-404', name: 'Coca Cola 500ml', x: 8, y: 2, stock: 145, burn: 60 },
-    { sku: 'ITM-889', name: 'Lays Classic', x: 1, y: 8, stock: 210, burn: 30 },
-    { sku: 'ITM-991', name: 'Ibuprofen 200mg', x: 7, y: 7, stock: 5, burn: 2 },
-    { sku: 'ITM-223', name: 'Frozen Pizza', x: 5, y: 9, stock: 88, burn: 14 },
+// --- ENTHIRAN B2B AI-POWERED LOGISTICS ENGINE ---
+
+// 1. Data Models & State
+const storeNodes = [
+    { id: 'Node-1 (Main)', x: 0, y: 0, stockLimit: 100 },
+    { id: 'Node-2 (East)', x: 5, y: 0, stockLimit: 100 },
+    { id: 'Node-3 (South)', x: 0, y: -5, stockLimit: 100 }
+];
+
+const inventoryDB = [
+    { sku: 'ITM-940', name: 'Whole Milk 1L', weightKg: 1.1, stock: 12, burn: 45 },
+    { sku: 'ITM-112', name: 'Bananas (Dozen)', weightKg: 0.5, stock: 34, burn: 18 },
+    { sku: 'ITM-404', name: 'Coca Cola 500ml', weightKg: 0.6, stock: 145, burn: 60 },
+    { sku: 'ITM-889', name: 'Lays Classic', weightKg: 0.2, stock: 210, burn: 30 },
+    { sku: 'ITM-991', name: 'Ibuprofen 200mg', weightKg: 0.1, stock: 5, burn: 2 },
+    { sku: 'ITM-223', name: 'Frozen Pizza', weightKg: 0.8, stock: 88, burn: 14 },
 ];
 
 let fleetDB = [
-    { rid: 'R-1', name: 'John Doe', status: 'idle', tag: 'waiting', batch: 'None' },
-    { rid: 'R-2', name: 'Sarah S.', status: 'idle', tag: 'waiting', batch: 'None' },
-    { rid: 'R-3', name: 'Mike R.', status: 'idle', tag: 'waiting', batch: 'None' },
+    { rid: 'R-1', name: 'John Doe', type: 'BIKE', status: 'idle', tag: 'waiting', batch: 'None', maxWeight: 15.0 },
+    { rid: 'R-2', name: 'Sarah S.', type: 'BIKE', status: 'idle', tag: 'waiting', batch: 'None', maxWeight: 15.0 },
+    { rid: 'D-Aero1', name: 'Drone X-1', type: 'DRONE', status: 'idle', tag: 'waiting', batch: 'None', maxWeight: 2.5 },
+    { rid: 'D-Aero2', name: 'Drone X-2', type: 'DRONE', status: 'idle', tag: 'waiting', batch: 'None', maxWeight: 2.5 },
 ];
 
 let pendingOrders = [];
 let orderCounter = 0;
+let weatherStatus = 'CLEAR';
 
-// --- Engine 1: Dynamic Inventory Predictor ---
-function runInventoryPredictor() {
+// Metrics for Graph
+let timeLabels = [];
+let droneDeliveriesData = [];
+let bikeDeliveriesData = [];
+let totalDroneCount = 0;
+let totalBikeCount = 0;
+let enthiranChart;
+
+// --- Chart Initialization ---
+function initEnthiranChart() {
+    const ctx = document.getElementById('enthiranChart').getContext('2d');
+    
+    // Initial data buffer
+    for(let i=0; i<10; i++) {
+        timeLabels.push('');
+        droneDeliveriesData.push(0);
+        bikeDeliveriesData.push(0);
+    }
+    
+    enthiranChart = new Chart(ctx, {
+        type: 'line',
+        data: {
+            labels: timeLabels,
+            datasets: [
+                {
+                    label: 'Autonomous Drone Actions (Cumulative)',
+                    data: droneDeliveriesData,
+                    borderColor: '#00FF88', // Success Green
+                    backgroundColor: 'rgba(0, 255, 136, 0.1)',
+                    borderWidth: 3,
+                    tension: 0.4,
+                    fill: true
+                },
+                {
+                    label: 'Human Bike Actions (Cumulative)',
+                    data: bikeDeliveriesData,
+                    borderColor: '#2D7FF9', // Accent Blue
+                    backgroundColor: 'rgba(45, 127, 249, 0.1)',
+                    borderWidth: 3,
+                    tension: 0.4,
+                    fill: true
+                }
+            ]
+        },
+        options: {
+            responsive: true,
+            maintainAspectRatio: false,
+            plugins: {
+                legend: { labels: { color: '#FFFFFF', font: { family: 'Inter' } } }
+            },
+            scales: {
+                y: {
+                    beginAtZero: true,
+                    grid: { color: 'rgba(255, 255, 255, 0.1)' },
+                    ticks: { color: '#8B8B9B', stepSize: 1 }
+                },
+                x: {
+                    grid: { color: 'rgba(255, 255, 255, 0.1)' },
+                    ticks: { color: '#8B8B9B' }
+                }
+            },
+            animation: {
+                duration: 400
+            }
+        }
+    });
+}
+
+function updateChartTick() {
+    const now = new Date();
+    const timeStr = `${now.getHours()}:${now.getMinutes()}:${now.getSeconds()}`;
+    
+    enthiranChart.data.labels.push(timeStr);
+    enthiranChart.data.datasets[0].data.push(totalDroneCount);
+    enthiranChart.data.datasets[1].data.push(totalBikeCount);
+    
+    // Keep sliding window size fixed
+    if (enthiranChart.data.labels.length > 20) {
+        enthiranChart.data.labels.shift();
+        enthiranChart.data.datasets[0].data.shift();
+        enthiranChart.data.datasets[1].data.shift();
+    }
+    
+    enthiranChart.update();
+}
+
+
+// --- Engine 1: Dynamic Demand Predictor & Node Balancer ---
+function runAIInventoryPredictor() {
     const table = document.getElementById('inventory-table');
     const alertsContainer = document.getElementById('alerts-container');
     if (!table || !alertsContainer) return;
     
     table.innerHTML = '';
     alertsContainer.innerHTML = '';
-    let criticalCount = 0;
 
     inventoryDB.forEach(item => {
-        // Calculate Burn Rate Logic: Will it last the 4 hour shift?
-        const projectedDemand = item.burn * 4.0;
-        let status = 'Good';
+        const demandSpikeMultiplier = (new Date().getHours() > 17 && new Date().getHours() < 20) ? 1.8 : 1.0;
+        const projectedDemand = item.burn * 4.0 * demandSpikeMultiplier;
+        
+        let status = 'Stable';
         let stockClass = 'stock-good';
         
         if (projectedDemand >= item.stock) {
-            status = 'Critical';
+            status = 'Stockout Imminent';
             stockClass = 'stock-crit';
-            criticalCount++;
-            
-            // Push to alerts UI
             const deficit = Math.ceil(projectedDemand - item.stock);
+            
             const alertDiv = document.createElement('div');
             alertDiv.className = 'alert-item';
-            alertDiv.innerHTML = `<span>🔴</span> <span>[${item.sku}] URGENT RESTOCK: Need ${deficit} more units of ${item.name} for shift completion.</span> <span style="margin-left: auto; font-size: 11px; opacity: 0.7;">Just now</span>`;
+            alertDiv.innerHTML = `<span>⚡</span> <span>[ENTHIRAN ML - ${item.sku}] Predicting stockout! Triggered node transfer of ${deficit} units from Node-2.</span>`;
             alertsContainer.appendChild(alertDiv);
         } else if (projectedDemand >= (item.stock * 0.7)) {
-            status = 'Low';
+            status = 'Elevated Risk';
             stockClass = 'stock-low';
         }
 
         table.innerHTML += `<tr>
             <td>${item.sku}</td>
             <td><strong>${item.name}</strong></td>
-            <td class="${stockClass}">${item.stock} units</td>
-            <td>${item.burn} / hr</td>
-            <td><span class="${stockClass}">${status}</span></td>
+            <td>${(item.burn * demandSpikeMultiplier).toFixed(1)} / hr</td>
+            <td class="${stockClass}">${status}</td>
+            <td><span class="${stockClass}">${status === 'Stockout Imminent' ? 'Rerouting fulfilled orders to Node-2' : 'Node-1 Main handling'}</span></td>
         </tr>`;
     });
 }
 
-// --- Engine 2: Routing Optimization (TSP) ---
+// --- Helper Math ---
 function calculateDistance(p1, p2) {
     return Math.sqrt(Math.pow(p1.x - p2.x, 2) + Math.pow(p1.y - p2.y, 2));
 }
 
-function optimizePickingPath(orderItemsText) {
-    // Map order text to actual warehouse item coordinates
-    let itemsToPick = [];
-    inventoryDB.forEach(inv => {
-        if (orderItemsText.includes(inv.name)) itemsToPick.push({...inv});
-    });
-
-    if (itemsToPick.length === 0) return orderItemsText;
-
-    let currentLocation = {x: 0, y: 0}; // Start at dispatch
-    let unvisited = [...itemsToPick];
-    let pathNames = [];
-
-    // Nearest Neighbor TSP Algorithm
-    while (unvisited.length > 0) {
-        let nearestIdx = 0;
-        let minDistance = Infinity;
-        for (let i = 0; i < unvisited.length; i++) {
-            let dist = calculateDistance(currentLocation, {x: unvisited[i].x, y: unvisited[i].y});
-            if (dist < minDistance) {
-                minDistance = dist;
-                nearestIdx = i;
-            }
+// --- Engine 2: Multi-Node Order Routing ---
+function selectOptimalStoreNode(orderLoc) {
+    let closestNode = storeNodes[0];
+    let minDistance = Infinity;
+    storeNodes.forEach(node => {
+        let dist = calculateDistance(orderLoc, {x: node.x, y: node.y});
+        if (dist < minDistance) {
+            minDistance = dist;
+            closestNode = node;
         }
-        let nearest = unvisited.splice(nearestIdx, 1)[0];
-        pathNames.push(nearest.name);
-        currentLocation = {x: nearest.x, y: nearest.y};
-    }
-    return pathNames.join(' ➔ ');
+    });
+    return { node: closestNode, distance_km: minDistance.toFixed(1) };
 }
 
-// --- Engine 3: Smart Batching & Fleet Allocation ---
-function runBatchingEngine() {
+// --- Engine 3: Smart Fleet & Vehicle Allocation (Bikes vs Drones) ---
+function runAIFleetAllocation() {
     if (pendingOrders.length === 0) return;
 
-    // Grouping Algorithm based on geographic proximity
     let unbatched = [...pendingOrders];
-    let batches = [];
+    const fleetTable = document.getElementById('fleet-table');
+    if (fleetTable) fleetTable.innerHTML = '';
 
+    // First pass: Find ideal orders for Drones
+    fleetDB.filter(f => f.type === 'DRONE' && f.status === 'idle').forEach(drone => {
+        if (weatherStatus !== 'CLEAR') return; // Drones grounded
+        
+        let bestOrderIdx = -1;
+        for (let i = 0; i < unbatched.length; i++) {
+            let o = unbatched[i];
+            if (o.totalWeightKg <= drone.maxWeight && parseFloat(o.nodeDist) > 1.5) {
+                bestOrderIdx = i;
+                break;
+            }
+        }
+
+        if (bestOrderIdx !== -1) {
+            let assignedOrder = unbatched.splice(bestOrderIdx, 1)[0];
+            drone.status = 'delivering';
+            drone.tag = 'riding';
+            drone.batch = assignedOrder.id;
+            assignedOrder.status = `Assigned to ${drone.rid} (DRONE)`;
+            assignedOrder.css = 'status-ready';
+            
+            // GRAPH METRIC UPDATE
+            totalDroneCount += 1;
+            
+            setTimeout(() => { drone.status = 'idle'; drone.tag = 'waiting'; runAIFleetAllocation(); }, 8000);
+        }
+    });
+
+    // Second pass: Batch remaining orders for Bikes
     while (unbatched.length > 0) {
         let coreOrder = unbatched.shift();
         let currentBatch = [coreOrder];
-        
         let toRemove = [];
         for (let i = 0; i < unbatched.length; i++) {
             let otherOrder = unbatched[i];
-            let dist = calculateDistance(coreOrder.loc, otherOrder.loc);
-            if (dist <= 3.0) { // Max 3km grouping
+            if (calculateDistance(coreOrder.loc, otherOrder.loc) <= 2.0) { 
                 currentBatch.push(otherOrder);
                 toRemove.push(i);
             }
         }
+        for (let i = toRemove.length - 1; i >= 0; i--) unbatched.splice(toRemove[i], 1);
         
-        // Remove batched orders from unbatched list
-        for (let i = toRemove.length - 1; i >= 0; i--) {
-            unbatched.splice(toRemove[i], 1);
+        // Find a bike
+        let bike = fleetDB.find(f => f.type === 'BIKE' && f.status === 'idle');
+        if (bike) {
+            bike.status = 'delivering';
+            bike.tag = 'riding';
+            bike.batch = `Batched ${currentBatch.length} orders`;
+            currentBatch.forEach(o => { o.status = `Assigned to ${bike.rid} (BIKE)`; o.css = 'status-picking'; });
+            
+            // GRAPH METRIC UPDATE
+            totalBikeCount += currentBatch.length;
+            
+            setTimeout(() => { bike.status = 'idle'; bike.tag = 'waiting'; runAIFleetAllocation(); }, 16000);
         }
-        
-        batches.push({
-            id: `BATCH-${Math.floor(Math.random() * 9000) + 1000}`,
-            orders: currentBatch
-        });
     }
 
-    // Allocate Fleet
-    let ridersQueue = fleetDB.filter(r => r.status === 'idle');
-    const fleetTable = document.getElementById('fleet-table');
-    if (fleetTable) fleetTable.innerHTML = '';
-
-    fleetDB.forEach(rider => {
-        let assignedBatch = 'Unassigned';
-        if (rider.status === 'idle' && batches.length > 0) {
-            let b = batches.shift();
-            assignedBatch = `${b.id} (${b.orders.length} orders)`;
-            rider.status = 'delivering';
-            rider.tag = 'riding';
-            
-            // Mark orders as picked
-            b.orders.forEach(o => { o.status = `Assigned to ${rider.rid}`; o.css = 'status-picking'; });
-            
-            // Reset rider back to idle after 15 seconds to simulate round trip
-            setTimeout(() => { rider.status = 'idle'; rider.tag = 'waiting'; runBatchingEngine(); }, 15000);
-        } else if (rider.status === 'delivering') {
-            assignedBatch = "Currently on road";
-        }
-        
-        let uiStatus = rider.status === 'idle' ? 'Waiting at Store' : 'Riding to Cust';
-        if(fleetTable) {
-             fleetTable.innerHTML += `<tr><td>${rider.rid}</td><td>${rider.name}</td><td><span class="tag ${rider.tag}">${uiStatus}</span></td><td>${assignedBatch}</td><td>Simulating...</td></tr>`;
+    fleetDB.forEach(vehicle => {
+        let uiStatus = vehicle.status === 'idle' ? 'Charging/Waiting' : 'On Route';
+        let costMetrics = vehicle.type === 'DRONE' ? '$0.15/run (Optimal)' : '$2.45/run (Standard)';
+        if (fleetTable) {
+             fleetTable.innerHTML += `<tr>
+                <td>${vehicle.rid}</td>
+                <td><strong>${vehicle.type}</strong></td>
+                <td><span class="tag ${vehicle.tag}">${uiStatus}</span></td>
+                <td>${vehicle.status === 'idle' ? 'Unassigned' : vehicle.batch}</td>
+                <td style="color: ${vehicle.type === 'DRONE' ? 'var(--success-green)' : 'white'};">${costMetrics}</td>
+            </tr>`;
         }
     });
+
+    renderOrders();
+}
+
+// --- Order Injection Simulation ---
+function ingestNewOrder() {
+    const numItems = Math.floor(Math.random() * 3) + 1;
+    let selected = [];
+    let totalWeight = 0;
+    
+    for(let i=0; i<numItems; i++) {
+        let item = inventoryDB[Math.floor(Math.random() * inventoryDB.length)];
+        selected.push(item.name);
+        totalWeight += item.weightKg;
+    }
+
+    let loc = {x: (Math.random() * 12) - 6, y: (Math.random() * 12) - 6};
+    let nodeSelection = selectOptimalStoreNode(loc);
+
+    const order = {
+        id: `ORD-${1000 + orderCounter++}`,
+        originalItems: selected.join(', '),
+        loc: loc,
+        totalWeightKg: totalWeight.toFixed(1),
+        nodeAssigned: nodeSelection.node.id,
+        nodeDist: nodeSelection.distance_km,
+        status: 'ENTHIRAN Processing...',
+        css: 'status-packing'
+    };
+
+    pendingOrders.unshift(order);
+    if (pendingOrders.length > 20) pendingOrders.pop(); 
+    runAIFleetAllocation();
+}
+
+function renderOrders() {
+    const list = document.getElementById('order-list');
+    if (!list) return;
+    list.innerHTML = '';
+    
+    pendingOrders.forEach(o => {
+        const li = document.createElement('div');
+        li.className = `order-card ${o.css}`;
+        li.innerHTML = `
+            <div class="order-header">
+                <span class="order-id">${o.id}</span>
+                <span class="order-time" style="color: var(--text-secondary)">Weight: ${o.totalWeightKg}kg</span>
+            </div>
+            <div class="order-details" style="color: var(--accent-blue); margin-bottom: 4px;">
+                <span><strong>Fulfilling from: </strong> ${o.nodeAssigned} (${o.nodeDist}km away)</span>
+            </div>
+            <div class="order-details">
+                <span>Status: ${o.status}</span>
+            </div>
+        `;
+        list.appendChild(li);
+    });
+}
+
+// --- View Navigation & Heatmap Loop ---
+function initNavigation() {
+    const navItems = document.querySelectorAll('#sidebar-nav li');
+    const views = document.querySelectorAll('.view-section');
+
+    navItems.forEach(item => {
+        item.addEventListener('click', () => {
+            navItems.forEach(nav => nav.classList.remove('active'));
+            item.classList.add('active');
+            views.forEach(view => {
+                view.classList.remove('active-view');
+                view.classList.add('hidden-view');
+            });
+            const targetView = document.getElementById(item.getAttribute('data-target'));
+            if (targetView) {
+                targetView.classList.remove('hidden-view');
+                targetView.classList.add('active-view');
+            }
+        });
+    });
+}
+
+function initHeatmap() {
+    const grid = document.getElementById('heatmap-grid');
+    if (!grid) return;
+    for (let i = 0; i < 32; i++) {
+        const cell = document.createElement('div');
+        cell.className = 'heatmap-cell';
+        const aisle = String.fromCharCode(65 + Math.floor(i / 8));
+        cell.innerHTML = `<div class="cell-label">${aisle}-${(i % 8) + 1}</div><div class="cell-activity">0</div>`;
+        grid.appendChild(cell);
+    }
+}
+
+function updateHeatmapData() {
+    const cells = document.querySelectorAll('.heatmap-cell');
+    if (!cells) return;
+    cells.forEach(cell => {
+        cell.classList.remove('activity-med', 'activity-high');
+        const countData = Math.floor(Math.random() * 20);
+        const activityDiv = cell.querySelector('.cell-activity');
+        if(!activityDiv) return;
+        activityDiv.innerText = countData;
+        if (countData > 15) cell.classList.add('activity-high');
+        else if (countData > 8) cell.classList.add('activity-med');
+        else if (countData === 0) activityDiv.innerText = '-';
+    });
+    
+    // Simulate Weather Changes occasionally
+    if (Math.random() > 0.95) {
+        weatherStatus = weatherStatus === 'CLEAR' ? 'RAIN_WIND' : 'CLEAR';
+        let ws = document.getElementById('weather-status');
+        if(ws) ws.innerHTML = weatherStatus === 'CLEAR' 
+            ? `<div class="status-indicator online"></div><span>Weather: CLEAR (Drones OK)</span>`
+            : `<div class="status-indicator" style="background: red;"></div><span style="color:red">Weather: WINDY (Drones Grounded)</span>`;
+    }
+}
+
+// --- Main Loop ---
+document.addEventListener('DOMContentLoaded', () => {
+    initNavigation();
+    initHeatmap();
+    initEnthiranChart();
+    
+    runAIInventoryPredictor();
+    runAIFleetAllocation();
+    
+    setInterval(updateHeatmapData, 3000); 
+    setInterval(ingestNewOrder, 3500); 
+    setInterval(runAIInventoryPredictor, 8000); 
+    setInterval(updateChartTick, 2000); // Chart updates every 2 seconds
+});
